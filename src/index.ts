@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 import { PodcastIndexApiClient } from "./api-client.js";
-import { ToolHandlers, TOOLS } from "./tool-handlers.js";
+import { ToolHandlers } from "./tool-handlers.js";
+import { createMcpServer } from "./server.js";
+import {
+  createHttpServer,
+  defaultAllowedHosts,
+  isLoopbackHost,
+  MCP_PATH,
+} from "./http.js";
 
 const API_KEY = process.env.PODCASTINDEX_API_KEY ?? "";
 const API_SECRET = process.env.PODCASTINDEX_API_SECRET ?? "";
@@ -22,53 +24,73 @@ if (!API_KEY || !API_SECRET) {
   );
 }
 
-class PodcastIndexServer {
-  private server: Server;
-  private toolHandlers: ToolHandlers;
-
-  constructor() {
-    this.server = new Server(
-      {
-        name: "podcastindex-mcp",
-        version: "0.3.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
-
-    const apiClient = new PodcastIndexApiClient(API_KEY, API_SECRET);
-    this.toolHandlers = new ToolHandlers(
-      apiClient,
-      Boolean(API_KEY && API_SECRET)
-    );
-    this.setupToolHandlers();
+/** `--transport http` / `--transport=http` wins over MCP_TRANSPORT. */
+function resolveTransport(argv: string[]): string {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--transport") return argv[i + 1] ?? "";
+    if (argv[i].startsWith("--transport=")) {
+      return argv[i].slice("--transport=".length);
+    }
   }
-
-  private setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOLS,
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      return this.toolHandlers.handleToolCall(
-        request.params.name,
-        request.params.arguments ?? {}
-      );
-    });
-  }
-
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-  }
+  return process.env.MCP_TRANSPORT ?? "stdio";
 }
 
-const server = new PodcastIndexServer();
-server.run().catch(console.error);
+const toolHandlers = new ToolHandlers(
+  new PodcastIndexApiClient(API_KEY, API_SECRET),
+  Boolean(API_KEY && API_SECRET)
+);
 
-process.on("SIGINT", () => {
-  process.exit(0);
+async function runStdio() {
+  const server = createMcpServer(toolHandlers);
+  await server.connect(new StdioServerTransport());
+  process.on("SIGINT", () => process.exit(0));
+}
+
+async function runHttp() {
+  const host = process.env.MCP_HOST ?? "127.0.0.1";
+  const port = Number(process.env.PORT ?? 3000);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid PORT: ${process.env.PORT}`);
+  }
+  const authToken = process.env.MCP_AUTH_TOKEN || undefined;
+  const allowedHosts = process.env.MCP_ALLOWED_HOSTS
+    ? process.env.MCP_ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+    : defaultAllowedHosts(host);
+
+  if (!isLoopbackHost(host) && !authToken) {
+    console.error(
+      `Warning: listening on ${host} without MCP_AUTH_TOKEN. Anyone who can ` +
+        "reach this port can spend your Podcast Index API quota."
+    );
+  }
+
+  const httpServer = createHttpServer(toolHandlers, { allowedHosts, authToken });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(port, host, resolve);
+  });
+  const shownHost = host.includes(":") ? `[${host}]` : host;
+  console.error(
+    `podcastindex-mcp listening on http://${shownHost}:${port}${MCP_PATH}`
+  );
+
+  const shutdown = () => httpServer.close(() => process.exit(0));
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
+const transport = resolveTransport(process.argv.slice(2));
+const run =
+  transport === "http"
+    ? runHttp
+    : transport === "stdio"
+      ? runStdio
+      : () =>
+          Promise.reject(
+            new Error(`Unknown transport "${transport}" (use stdio or http)`)
+          );
+
+run().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
 });

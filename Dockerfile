@@ -1,6 +1,8 @@
-# podcastindex-mcp — stdio MCP server for the Podcast Index API
+# podcastindex-mcp — MCP server for the Podcast Index API (stdio or Streamable HTTP)
 # Build:  docker build -t podcastindex-mcp .
-# Run:    docker run -i --rm -e PODCASTINDEX_API_KEY=... -e PODCASTINDEX_API_SECRET=... podcastindex-mcp
+# Run (stdio): docker run -i --rm -e PODCASTINDEX_API_KEY=... -e PODCASTINDEX_API_SECRET=... podcastindex-mcp
+# Run (HTTP):  docker run --rm -p 3000:3000 -e MCP_TRANSPORT=http -e MCP_HOST=0.0.0.0 \
+#                -e MCP_AUTH_TOKEN=... -e PODCASTINDEX_API_KEY=... -e PODCASTINDEX_API_SECRET=... podcastindex-mcp
 
 # Pin the multi-architecture base for reproducible MCP Catalog builds.
 # Dependabot checks the pinned node/alpine tag weekly for a new digest.
@@ -22,6 +24,10 @@ COPY --from=builder /app/build ./build
 # until both are set):
 #   PODCASTINDEX_API_KEY    — free API key from https://api.podcastindex.org/
 #   PODCASTINDEX_API_SECRET — matching API secret
+# HTTP mode (see README): MCP_TRANSPORT=http, MCP_HOST, PORT, MCP_AUTH_TOKEN,
+# MCP_ALLOWED_HOSTS
+
+EXPOSE 3000
 
 USER node
 CMD ["node", "build/index.js"]

@@ -88,6 +88,40 @@ Add to your project's `.mcp.json`:
 }
 ```
 
+### Streamable HTTP (remote / shared use)
+
+By default the server talks over stdio. To run it as a standalone HTTP server using the MCP [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http):
+
+```bash
+PODCASTINDEX_API_KEY=... PODCASTINDEX_API_SECRET=... \
+  node build/index.js --transport http     # or MCP_TRANSPORT=http
+```
+
+The MCP endpoint is `http://127.0.0.1:3000/mcp`. `GET /health` is a liveness check. Point a client at it, e.g. in Claude Code:
+
+```bash
+claude mcp add --transport http podcastindex http://127.0.0.1:3000/mcp
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MCP_TRANSPORT` | `stdio` | `stdio` or `http` (the `--transport` flag overrides it) |
+| `PORT` | `3000` | HTTP port |
+| `MCP_HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` in containers |
+| `MCP_AUTH_TOKEN` | unset | If set, `/mcp` requires `Authorization: Bearer <token>` |
+| `MCP_ALLOWED_HOSTS` | loopback names when bound to loopback, otherwise unset | Comma-separated hostnames accepted in the `Host` header (DNS-rebinding protection) |
+
+The HTTP server is stateless (no sessions): each POST gets a fresh MCP server instance, so it scales horizontally behind a load balancer. Your Podcast Index credentials live on the server, so anyone who can reach `/mcp` spends your API quota. Set `MCP_AUTH_TOKEN` whenever you bind to anything other than loopback, and put TLS in front of it (a reverse proxy).
+
+Docker:
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e MCP_TRANSPORT=http -e MCP_HOST=0.0.0.0 -e MCP_AUTH_TOKEN=... \
+  -e PODCASTINDEX_API_KEY=... -e PODCASTINDEX_API_SECRET=... \
+  podcastindex-mcp
+```
+
 ## Tools
 
 This server is entirely read-only: every tool declares the MCP [tool annotation](https://modelcontextprotocol.io/docs/concepts/tools#tool-annotations) `readOnlyHint: true`, so clients know no call mutates anything and can skip write-consent prompts.
